@@ -4,6 +4,6 @@
 # Jupyter
 **/.ipynb_checkpoints
 
-# Spark
-*.crc
-_SUCCESS
+# Tmp dirs
+data/
+output/
