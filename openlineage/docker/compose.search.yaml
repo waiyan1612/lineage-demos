@@ -1,0 +1,42 @@
+name: 'openlineage-demo'
+services:
+  api:
+    environment:
+      - SEARCH_ENABLED=true
+    depends_on:
+      - db
+      - opensearch
+    entrypoint: ["/opt/marquez/wait-for-it.sh", "db:5432", "--", "/opt/marquez/wait-for-it.sh", "opensearch:9200", "--", "./entrypoint.sh"]
+
+  web:
+    environment:
+      - REACT_APP_ADVANCED_SEARCH=true
+
+  opensearch:
+    image: "opensearchproject/opensearch:${OPENSEARCH_VERSION}"
+    hostname: opensearch
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch
+      - discovery.seed_hosts=opensearch
+      - discovery.type=single-node
+      # - cluster.initial_cluster_manager_nodes=opensearch
+      - bootstrap.memory_lock=true
+      - plugins.security.ssl.http.enabled=false
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_PASSWORD=admin
+    # volumes:
+    #   - opensearch-data:/usr/share/opensearch/data
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "${OPENSEARCH_PORT}:9200"
+      # Not required for single-node setup 
+      # - "9300:9300"

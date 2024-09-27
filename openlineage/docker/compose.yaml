@@ -1,0 +1,59 @@
+name: 'openlineage-demo'
+services:
+  api:
+    image: "marquezproject/marquez:${MARQUEZ_VERSION}"
+    platform: linux/amd64
+    ports:
+      - "${MARQUEZ_API_PORT}:5000"
+      - "${MARQUEZ_ADMIN_PORT}:5001"
+    volumes:
+      - "$HOST_MARQUEZ_DIR:/opt/marquez"
+    links:
+      - "db:postgres"
+    depends_on:
+      - db
+    entrypoint: ["/opt/marquez/wait-for-it.sh", "db:5432", "--", "./entrypoint.sh"]
+
+  web:
+    image: "marquezproject/marquez-web:${MARQUEZ_VERSION}"
+    environment:
+      - MARQUEZ_HOST=api
+      - MARQUEZ_PORT=5000
+    ports:
+      - "${MARQUEZ_WEB_PORT}:3000"
+    depends_on:
+      - api
+
+  db:
+    image: "postgres:${POSTGRES_VERSION}"
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - MARQUEZ_DB=marquez
+      - MARQUEZ_USER=marquez
+      - MARQUEZ_PASSWORD=marquez
+    volumes:
+      - "$HOST_PG_DIR/conf:/etc/postgresql"
+      - "$HOST_PG_DIR/init:/docker-entrypoint-initdb.d"
+      # - "$HOST_PG_DIR/data:/var/lib/postgresql/data"
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+  jupyter:
+    build:
+      dockerfile_inline: |
+        FROM quay.io/jupyter/pyspark-notebook:spark-3.5.2
+        RUN pip install jupyterlab_myst==2.4.2
+    user: "${UID}:0"  # Required to write notebook or data back to host volume
+    group_add:
+      - users
+    environment:
+      DOCKER_STACKS_JUPYTER_CMD: "lab"
+      NOTEBOOK_ARGS: "--IdentityProvider.token='easy'"
+    ports: 
+      - ${JUPYTER_PORT}:8888
+    volumes:
+      - "$HOST_NOTEBOOK_DIR:/home/jovyan/notebooks"
+      - "$HOST_DATA_DIR:/home/jovyan/data"
+      - "$HOST_OUT_DIR:/home/jovyan/output"
