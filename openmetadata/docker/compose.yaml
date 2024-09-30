@@ -1,0 +1,125 @@
+name: 'openmetadata-demo'
+services:
+  db:
+    image: "postgres:${POSTGRES_VERSION}"
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - "$HOST_PG_DIR/init:/docker-entrypoint-initdb.d"
+      # - "$HOST_PG_DIR/data:/var/lib/postgresql/data"
+    healthcheck:
+      test: psql -U postgres -tAc 'select 1' -d openmetadata_db
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTICSEARCH_VERSION}
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1024m -Xmx1024m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: "curl -s http://localhost:9200/_cluster/health?pretty | grep status | grep -qE 'green|yellow' || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+
+  openmetadata-migration:
+    image: docker.getcollate.io/openmetadata/server:${OPENMETADATA_VERSION}
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    env_file:
+      - ./.openmetadata.env
+    environment:
+      OPENMETADATA_CLUSTER_NAME: openmetadata
+      SERVER_PORT: 8585
+      SERVER_ADMIN_PORT: 8586
+      LOG_LEVEL: INFO
+      # Migration 
+      MIGRATION_LIMIT_PARAM: 1200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+  openmetadata-server:
+    restart: always
+    image: docker.getcollate.io/openmetadata/server:${OPENMETADATA_VERSION}
+    env_file:
+      - ./.openmetadata.env
+    environment:
+      OPENMETADATA_CLUSTER_NAME: openmetadata
+      SERVER_PORT: 8585
+      SERVER_ADMIN_PORT: 8586
+      LOG_LEVEL: INFO
+    ports:
+      - "${OPENMETADATA_WEB_PORT}:8585"
+      - "${OPENMETADATA_ADMIN_PORT}:8586"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      openmetadata-migration:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider",  "http://localhost:8586/healthcheck" ]
+
+  airflow-ingestion:
+    image: docker.getcollate.io/openmetadata/ingestion:${OPENMETADATA_VERSION}
+    depends_on:
+      elasticsearch:
+        condition: service_started
+      db:
+        condition: service_healthy
+      openmetadata-server:
+        condition: service_started
+    environment:
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__OPENMETADATA_AIRFLOW_APIS__DAG_GENERATED_CONFIGS: "/opt/airflow/dag_generated_configs"
+      AIRFLOW_DB: airflow_db
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: airflow_user
+      DB_PASSWORD: airflow_pass
+      DB_SCHEME: postgresql+psycopg2
+    entrypoint: /bin/bash
+    command:
+      - "/opt/airflow/ingestion_dependency.sh"
+    ports:
+      - "${AIRFLOW_PORT}:8080"
+    volumes:
+      - ingestion-volume-dag-airflow:/opt/airflow/dag_generated_configs
+      - ingestion-volume-dags:/opt/airflow/dags
+      - ingestion-volume-tmp:/tmp
+
+  jupyter:
+    image: quay.io/jupyter/pyspark-notebook:spark-3.5.2
+    user: "${UID}:0"  # Required to write notebook or data back to host volume
+    group_add:
+      - users
+    environment:
+      DOCKER_STACKS_JUPYTER_CMD: "lab"
+      NOTEBOOK_ARGS: "--IdentityProvider.token='easy'"
+    ports: 
+      - ${JUPYTER_PORT}:8888
+    volumes:
+      - "$HOST_NOTEBOOK_DIR:/home/jovyan/notebooks"
+      - "$HOST_DATA_DIR:/home/jovyan/data"
+      - "$HOST_OUT_DIR:/home/jovyan/output"
+
+volumes:
+  ingestion-volume-dag-airflow:
+  ingestion-volume-dags:
+  ingestion-volume-tmp:
+  es-data:
